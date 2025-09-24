@@ -6,17 +6,87 @@ import random
 import re
 import time
 import webbrowser
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from email.header import Header
+from email.utils import formataddr, formatdate, make_msgid
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Union
+from bs4 import BeautifulSoup
+try:
+    import google.generativeai as genai
+except Exception:
+    genai = None
 
 import pytz
 import requests
 import yaml
 
 
-VERSION = "2.2.0"
+VERSION = "2.3.1"
 
+
+# === SMTP邮件配置 ===
+SMTP_CONFIGS = {
+    # Gmail
+    'gmail.com': {
+        'server': 'smtp.gmail.com',
+        'port': 587,
+        'encryption': 'TLS'
+    },
+    
+    # QQ邮箱
+    'qq.com': {
+        'server': 'smtp.qq.com', 
+        'port': 587,
+        'encryption': 'TLS'
+    },
+    
+    # Outlook
+    'outlook.com': {
+        'server': 'smtp-mail.outlook.com',
+        'port': 587,
+        'encryption': 'TLS'
+    },
+    'hotmail.com': {
+        'server': 'smtp-mail.outlook.com',
+        'port': 587,
+        'encryption': 'TLS'
+    },
+    'live.com': {
+        'server': 'smtp-mail.outlook.com',
+        'port': 587,
+        'encryption': 'TLS'
+    },
+    
+    # 网易邮箱
+    '163.com': {
+        'server': 'smtp.163.com',
+        'port': 587,
+        'encryption': 'TLS'
+    },
+    '126.com': {
+        'server': 'smtp.126.com',
+        'port': 587,
+        'encryption': 'TLS'
+    },
+    
+    # 新浪邮箱
+    'sina.com': {
+        'server': 'smtp.sina.com',
+        'port': 587,
+        'encryption': 'TLS'
+    },
+    
+    # 搜狐邮箱
+    'sohu.com': {
+        'server': 'smtp.sohu.com',
+        'port': 587,
+        'encryption': 'TLS'
+    }
+}
 
 # === 配置管理 ===
 def load_config():
@@ -96,6 +166,23 @@ def load_config():
     config["TELEGRAM_CHAT_ID"] = os.environ.get(
         "TELEGRAM_CHAT_ID", ""
     ).strip() or webhooks.get("telegram_chat_id", "")
+    
+    # 邮件配置
+    config["EMAIL_FROM"] = os.environ.get(
+        "EMAIL_FROM", ""
+    ).strip() or webhooks.get("email_from", "")
+    config["EMAIL_PASSWORD"] = os.environ.get(
+        "EMAIL_PASSWORD", ""
+    ).strip() or webhooks.get("email_password", "")
+    config["EMAIL_TO"] = os.environ.get(
+        "EMAIL_TO", ""
+    ).strip() or webhooks.get("email_to", "")
+    config["EMAIL_SMTP_SERVER"] = os.environ.get(
+        "EMAIL_SMTP_SERVER", ""
+    ).strip() or webhooks.get("email_smtp_server", "")
+    config["EMAIL_SMTP_PORT"] = os.environ.get(
+        "EMAIL_SMTP_PORT", ""
+    ).strip() or webhooks.get("email_smtp_port", "")
 
     # 输出配置来源信息
     webhook_sources = []
@@ -114,11 +201,26 @@ def load_config():
         )
         chat_source = "环境变量" if os.environ.get("TELEGRAM_CHAT_ID") else "配置文件"
         webhook_sources.append(f"Telegram({token_source}/{chat_source})")
-
+    if config["EMAIL_FROM"] and config["EMAIL_PASSWORD"] and config["EMAIL_TO"]:
+        from_source = "环境变量" if os.environ.get("EMAIL_FROM") else "配置文件"
+        webhook_sources.append(f"邮件({from_source})")
+        
     if webhook_sources:
         print(f"Webhook 配置来源: {', '.join(webhook_sources)}")
     else:
         print("未配置任何 Webhook")
+
+    # AI 分析配置
+    ai_cfg = config_data.get("ai_analysis", {}) or {}
+    config["AI_ENABLED"] = bool(ai_cfg.get("enabled", False))
+    config["AI_CRYPTO_FOCUS"] = list(ai_cfg.get("crypto_focus", ["比特币", "BTC", "以太坊", "ETH"]))
+    config["AI_MAX_ARTICLES"] = int(ai_cfg.get("max_articles", 20))
+    config["AI_MODEL"] = str(ai_cfg.get("model", "gemini-2.0-pro-exp-02-05"))
+    config["AI_TIMEOUT_SECONDS"] = int(ai_cfg.get("timeout_seconds", 60))
+    config["AI_PROMPT_STYLE"] = str(ai_cfg.get("prompt_style", "concise"))
+
+    # 环境变量中的 Gemini API Key
+    config["GEMINI_API_KEY"] = os.environ.get("GEMINI_API_KEY", "").strip()
 
     return config
 
@@ -133,6 +235,87 @@ print(f"监控平台数量: {len(CONFIG['PLATFORMS'])}")
 def get_beijing_time():
     """获取北京时间"""
     return datetime.now(pytz.timezone("Asia/Shanghai"))
+
+
+def extract_article_text(url: str, proxy_url: Optional[str] = None, timeout: int = 15) -> str:
+    """下载并粗提取网页正文文本（容错，失败返回空字符串）。"""
+    try:
+        proxies = None
+        if proxy_url:
+            proxies = {"http": proxy_url, "https": proxy_url}
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36"
+        }
+        resp = requests.get(url, timeout=timeout, proxies=proxies, headers=headers)
+        if resp.status_code != 200 or not resp.text:
+            return ""
+        soup = BeautifulSoup(resp.text, "html.parser")
+        for t in soup(["script", "style", "noscript"]):
+            t.extract()
+        # 常见正文容器优先
+        candidates = []
+        for sel in [
+            "article",
+            "main",
+            "div#content",
+            "div.article",
+            "div.post",
+            "section",
+        ]:
+            node = soup.select_one(sel)
+            if node and len(node.get_text(strip=True)) > 200:
+                candidates.append(node.get_text("\n", strip=True))
+        if candidates:
+            candidates.sort(key=len, reverse=True)
+            return candidates[0][:8000]
+        # 兜底：全页文本
+        text = soup.get_text("\n", strip=True)
+        return text[:8000]
+    except Exception:
+        return ""
+
+
+def build_gemini_prompt(crypto_focus: List[str], items: List[Dict], style: str = "concise") -> str:
+    focus_str = ", ".join(crypto_focus)
+    lines = [
+        "你是一位资深的加密资产与宏观新闻分析师。",
+        f"请基于以下最新新闻要点，聚焦 {focus_str}，给出：",
+        "1) 市场情绪与叙事脉络",
+        "2) 关键利多/利空因素与时间窗口",
+        "3) 交易层面信号（短/中/长），并给出概率倾向",
+        "4) 风险点与无效化条件",
+        "5) 最终结论：对比特币等主流币的走势建议（非投资建议）",
+        "请以结构化要点输出，先结论后论据。",
+    ]
+    if style == "concise":
+        lines.append("整体不超过 350 中文字，重点先行，列表分条。")
+    lines.append("")
+    for i, it in enumerate(items[:50], 1):
+        title = it.get("title", "")
+        src = it.get("source", "")
+        url = it.get("url", "")
+        body = it.get("content", "")[:1200]
+        lines.append(f"[{i}] 来源:{src} 标题:{title}\n链接:{url}\n正文要点:\n{body}\n---")
+    return "\n".join(lines)[:12000]
+
+
+def run_gemini_analysis(prompt: str, api_key: Optional[str], model_name: str, timeout_seconds: int) -> Optional[str]:
+    if not api_key:
+        print("AI分析已启用但未提供 GEMINI_API_KEY，跳过AI分析")
+        return None
+    if genai is None:
+        print("未安装 google-generativeai，跳过AI分析")
+        return None
+    try:
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name)
+        resp = model.generate_content(prompt, request_options={"timeout": timeout_seconds})
+        if hasattr(resp, "text") and resp.text:
+            return resp.text.strip()
+        return None
+    except Exception as e:
+        print(f"Gemini 调用失败: {e}")
+        return None
 
 
 def format_date_folder():
@@ -1464,6 +1647,7 @@ def generate_html_report(
     id_to_name: Optional[Dict] = None,
     mode: str = "daily",
     is_daily_summary: bool = False,
+    update_info: Optional[Dict] = None,
 ) -> str:
     """生成HTML报告"""
     if is_daily_summary:
@@ -1480,8 +1664,52 @@ def generate_html_report(
 
     report_data = prepare_report_data(stats, failed_ids, new_titles, id_to_name, mode)
 
+    # AI 分析：根据配置调用 Gemini，对加密货币相关资讯给出走势建议
+    if CONFIG.get("AI_ENABLED"):
+        try:
+            # 选取候选新闻
+            items: List[Dict] = []
+            max_articles = CONFIG.get("AI_MAX_ARTICLES", 20)
+            crypto_focus = CONFIG.get("AI_CRYPTO_FOCUS", ["比特币", "BTC", "以太坊", "ETH"]) or []
+
+            # 从各词组里顺序收集，优先高权重词组靠前的新闻
+            for stat in stats:
+                for t in stat.get("titles", []):
+                    url = t.get("url") or t.get("mobileUrl") or ""
+                    items.append({
+                        "title": t.get("title", ""),
+                        "source": t.get("source_name", ""),
+                        "url": url,
+                    })
+                    if len(items) >= max_articles * 2:  # 先多取一些，后面再筛
+                        break
+                if len(items) >= max_articles * 2:
+                    break
+
+            # 抓取正文并简单过滤出与币相关的内容
+            enriched: List[Dict] = []
+            for it in items:
+                if len(enriched) >= max_articles:
+                    break
+                url = it.get("url")
+                content = ""
+                if url:
+                    content = extract_article_text(url, proxy_url=CONFIG.get("DEFAULT_PROXY") if CONFIG.get("USE_PROXY") else None)
+                text_blob = (it.get("title", "") + "\n" + content)
+                if not crypto_focus or any(k.lower() in text_blob.lower() for k in crypto_focus):
+                    it["content"] = content
+                    enriched.append(it)
+
+            if enriched:
+                prompt = build_gemini_prompt(crypto_focus, enriched, CONFIG.get("AI_PROMPT_STYLE", "concise"))
+                ai_html = run_gemini_analysis(prompt, CONFIG.get("GEMINI_API_KEY"), CONFIG.get("AI_MODEL", "gemini-2.0-pro-exp-02-05"), CONFIG.get("AI_TIMEOUT_SECONDS", 60))
+                if ai_html:
+                    report_data["ai_html"] = ai_html
+        except Exception as e:
+            print(f"AI 分析阶段跳过（错误）：{e}")
+
     html_content = render_html_content(
-        report_data, total_titles, is_daily_summary, mode
+        report_data, total_titles, is_daily_summary, mode, update_info
     )
 
     with open(file_path, "w", encoding="utf-8") as f:
@@ -1500,6 +1728,7 @@ def render_html_content(
     total_titles: int,
     is_daily_summary: bool = False,
     mode: str = "daily",
+    update_info: Optional[Dict] = None,
 ) -> str:
     """渲染HTML内容"""
     html = """
@@ -1768,6 +1997,9 @@ def render_html_content(
                 font-weight: 600;
                 margin: 0 0 20px 0;
             }
+            .ai-section { margin-top: 40px; padding: 16px; background: #f3f4f6; border: 1px solid #e5e7eb; border-radius: 8px; }
+            .ai-title { font-size: 16px; font-weight: 700; margin: 0 0 8px 0; }
+            .ai-content { font-size: 14px; white-space: pre-wrap; color: #111827; }
             
             .new-source-group {
                 margin-bottom: 24px;
@@ -1876,7 +2108,7 @@ def render_html_content(
             .footer-content {
                 font-size: 13px;
                 color: #6b7280;
-                line-height: 1.4;
+                line-height: 1.6;
             }
             
             .footer-link {
@@ -2149,15 +2381,34 @@ def render_html_content(
         html += """
                 </div>"""
 
+    # 注入 AI 分析
+    ai_html = report_data.get("ai_html")
+    if ai_html:
+        html += f"""
+                <div class=\"ai-section\">
+                    <div class=\"ai-title\">🤖 AI 加密市场简析（Gemini）</div>
+                    <div class=\"ai-content\">{html_escape(ai_html)}</div>
+                </div>
+        """
+
     html += """
             </div>
-            
+
             <div class="footer">
                 <div class="footer-content">
                     由 <span class="project-name">TrendRadar</span> 生成 · 
                     <a href="https://github.com/sansan0/TrendRadar" target="_blank" class="footer-link">
                         GitHub 开源项目
-                    </a>
+                    </a>"""
+                    
+    if update_info:
+        html += f"""
+                    <br>
+                    <span style="color: #ea580c; font-weight: 500;">
+                        发现新版本 {update_info['remote_version']}，当前版本 {update_info['current_version']}
+                    </span>"""
+
+    html += """
                 </div>
             </div>
         </div>
@@ -2323,6 +2574,12 @@ def render_feishu_content(
         for i, id_value in enumerate(report_data["failed_ids"], 1):
             text_content += f"  • <font color='red'>{id_value}</font>\n"
 
+    # 可选追加 AI 简析
+    if report_data.get("ai_html"):
+        ai_text = report_data["ai_html"].strip()
+        short_ai = ai_text[:600]
+        text_content += f"\n{CONFIG['FEISHU_MESSAGE_SEPARATOR']}\n\n🤖 AI 简析（Gemini）\n\n{short_ai}\n"
+
     now = get_beijing_time()
     text_content += (
         f"\n\n<font color='grey'>更新时间：{now.strftime('%Y-%m-%d %H:%M:%S')}</font>"
@@ -2418,6 +2675,12 @@ def render_dingtalk_content(
         text_content += "⚠️ **数据获取失败的平台：**\n\n"
         for i, id_value in enumerate(report_data["failed_ids"], 1):
             text_content += f"  • **{id_value}**\n"
+
+    # 可选追加 AI 简析
+    if report_data.get("ai_html"):
+        ai_text = report_data["ai_html"].strip()
+        short_ai = ai_text[:600]
+        text_content += f"\n---\n\n🤖 AI 简析（Gemini）\n\n{short_ai}\n"
 
     text_content += f"\n\n> 更新时间：{now.strftime('%Y-%m-%d %H:%M:%S')}"
 
@@ -2823,6 +3086,7 @@ def send_to_webhooks(
     update_info: Optional[Dict] = None,
     proxy_url: Optional[str] = None,
     mode: str = "daily",
+    html_file_path: Optional[str] = None,
 ) -> Dict[str, bool]:
     """发送数据到多个webhook平台"""
     results = {}
@@ -2851,6 +3115,11 @@ def send_to_webhooks(
     wework_url = CONFIG["WEWORK_WEBHOOK_URL"]
     telegram_token = CONFIG["TELEGRAM_BOT_TOKEN"]
     telegram_chat_id = CONFIG["TELEGRAM_CHAT_ID"]
+    email_from = CONFIG["EMAIL_FROM"]
+    email_password = CONFIG["EMAIL_PASSWORD"]
+    email_to = CONFIG["EMAIL_TO"]
+    email_smtp_server = CONFIG.get("EMAIL_SMTP_SERVER", "")
+    email_smtp_port = CONFIG.get("EMAIL_SMTP_PORT", "")
 
     update_info_to_send = update_info if CONFIG["SHOW_VERSION_UPDATE"] else None
 
@@ -2882,6 +3151,18 @@ def send_to_webhooks(
             update_info_to_send,
             proxy_url,
             mode,
+        )
+
+    # 发送邮件
+    if email_from and email_password and email_to:
+        results["email"] = send_to_email(
+            email_from,
+            email_password,
+            email_to,
+            report_type,
+            html_file_path,
+            email_smtp_server,
+            email_smtp_port,
         )
 
     if not results:
@@ -3156,6 +3437,137 @@ def send_to_telegram(
     print(f"Telegram所有 {len(batches)} 批次发送完成 [{report_type}]")
     return True
 
+def send_to_email(
+    from_email: str,
+    password: str,
+    to_email: str,
+    report_type: str,
+    html_file_path: str,
+    custom_smtp_server: Optional[str] = None,
+    custom_smtp_port: Optional[int] = None,
+) -> bool:
+    """发送邮件通知"""
+    try:
+        if not html_file_path or not Path(html_file_path).exists():
+            print(f"错误：HTML文件不存在或未提供: {html_file_path}")
+            return False
+            
+        print(f"使用HTML文件: {html_file_path}")
+        with open(html_file_path, "r", encoding="utf-8") as f:
+            html_content = f.read()
+        
+        domain = from_email.split('@')[-1].lower()
+        
+        if custom_smtp_server and custom_smtp_port:
+            # 使用自定义 SMTP 配置
+            smtp_server = custom_smtp_server
+            smtp_port = int(custom_smtp_port)
+            use_tls = smtp_port == 587
+        elif domain in SMTP_CONFIGS:
+            # 使用预设配置
+            config = SMTP_CONFIGS[domain]
+            smtp_server = config['server']
+            smtp_port = config['port']
+            use_tls = config['encryption'] == 'TLS'
+        else:
+            print(f"未识别的邮箱服务商: {domain}，使用通用 SMTP 配置")
+            smtp_server = f"smtp.{domain}"
+            smtp_port = 587
+            use_tls = True
+        
+        msg = MIMEMultipart('alternative')
+        
+        # 严格按照 RFC 标准设置 From header
+        sender_name = "TrendRadar"
+        msg['From'] = formataddr((sender_name, from_email))
+        
+        # 设置收件人
+        recipients = [addr.strip() for addr in to_email.split(',')]
+        if len(recipients) == 1:
+            msg['To'] = recipients[0]
+        else:
+            msg['To'] = ', '.join(recipients)
+        
+        # 设置邮件主题
+        now = get_beijing_time()
+        subject = f"TrendRadar 热点分析报告 - {report_type} - {now.strftime('%m月%d日 %H:%M')}"
+        msg['Subject'] = Header(subject, 'utf-8')
+        
+        # 设置其他标准 header
+        msg['MIME-Version'] = '1.0'
+        msg['Date'] = formatdate(localtime=True)
+        msg['Message-ID'] = make_msgid()
+        
+        # 添加纯文本部分（作为备选）
+        text_content = f"""
+TrendRadar 热点分析报告
+========================
+报告类型：{report_type}
+生成时间：{now.strftime('%Y-%m-%d %H:%M:%S')}
+
+请使用支持HTML的邮件客户端查看完整报告内容。
+        """
+        text_part = MIMEText(text_content, 'plain', 'utf-8')
+        msg.attach(text_part)
+        
+        html_part = MIMEText(html_content, 'html', 'utf-8')
+        msg.attach(html_part)
+        
+        print(f"正在发送邮件到 {to_email}...")
+        print(f"SMTP 服务器: {smtp_server}:{smtp_port}")
+        print(f"发件人: {from_email}")
+        
+        try:
+            if use_tls:
+                # TLS 模式
+                server = smtplib.SMTP(smtp_server, smtp_port, timeout=30)
+                server.set_debuglevel(0)  # 设为1可以查看详细调试信息
+                server.ehlo()
+                server.starttls()
+                server.ehlo()
+            else:
+                # SSL 模式
+                server = smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=30)
+                server.set_debuglevel(0)
+                server.ehlo()
+            
+            # 登录
+            server.login(from_email, password)
+            
+            # 发送邮件
+            server.send_message(msg)
+            server.quit()
+            
+            print(f"邮件发送成功 [{report_type}] -> {to_email}")
+            return True
+            
+        except smtplib.SMTPServerDisconnected:
+            print(f"邮件发送失败：服务器意外断开连接，请检查网络或稍后重试")
+            return False
+            
+    except smtplib.SMTPAuthenticationError as e:
+        print(f"邮件发送失败：认证错误，请检查邮箱和密码/授权码")
+        print(f"详细错误: {str(e)}")
+        return False
+    except smtplib.SMTPRecipientsRefused as e:
+        print(f"邮件发送失败：收件人地址被拒绝 {e}")
+        return False
+    except smtplib.SMTPSenderRefused as e:
+        print(f"邮件发送失败：发件人地址被拒绝 {e}")
+        return False
+    except smtplib.SMTPDataError as e:
+        print(f"邮件发送失败：邮件数据错误 {e}")
+        return False
+    except smtplib.SMTPConnectError as e:
+        print(f"邮件发送失败：无法连接到 SMTP 服务器 {smtp_server}:{smtp_port}")
+        print(f"详细错误: {str(e)}")
+        return False
+    except Exception as e:
+        print(f"邮件发送失败 [{report_type}]：{e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
 
 # === 主分析器 ===
 class NewsAnalyzer:
@@ -3374,6 +3786,7 @@ class NewsAnalyzer:
             id_to_name=id_to_name,
             mode=mode,
             is_daily_summary=is_daily_summary,
+            update_info=self.update_info if CONFIG["SHOW_VERSION_UPDATE"] else None,
         )
 
         return stats, html_file
@@ -3386,6 +3799,7 @@ class NewsAnalyzer:
         failed_ids: Optional[List] = None,
         new_titles: Optional[Dict] = None,
         id_to_name: Optional[Dict] = None,
+        html_file_path: Optional[str] = None,
     ) -> bool:
         """统一的通知发送逻辑，包含所有判断条件"""
         has_webhook = self._has_webhook_configured()
@@ -3404,6 +3818,7 @@ class NewsAnalyzer:
                 self.update_info,
                 self.proxy_url,
                 mode=mode,
+                html_file_path=html_file_path, 
             )
             return True
         elif CONFIG["ENABLE_NOTIFICATION"] and not has_webhook:
@@ -3456,14 +3871,16 @@ class NewsAnalyzer:
         )
 
         print(f"{summary_type}报告已生成: {html_file}")
-
+        
         # 发送通知
         self._send_notification_if_needed(
             stats,
             mode_strategy["summary_report_type"],
             mode_strategy["summary_mode"],
+            failed_ids=[],
             new_titles=new_titles,
             id_to_name=id_to_name,
+            html_file_path=html_file, 
         )
 
         return html_file
@@ -3596,6 +4013,7 @@ class NewsAnalyzer:
                         failed_ids=failed_ids,
                         new_titles=historical_new_titles,
                         id_to_name=combined_id_to_name,
+                        html_file_path=html_file,
                     )
             else:
                 print("❌ 严重错误：无法读取刚保存的数据文件")
@@ -3624,6 +4042,7 @@ class NewsAnalyzer:
                     failed_ids=failed_ids,
                     new_titles=new_titles,
                     id_to_name=id_to_name,
+                    html_file_path=html_file,
                 )
 
         # 生成汇总报告（如果需要）
