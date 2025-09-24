@@ -184,6 +184,23 @@ def load_config():
         "EMAIL_SMTP_PORT", ""
     ).strip() or webhooks.get("email_smtp_port", "")
 
+    # AI 分析配置
+    ai_cfg = config_data.get("ai_analysis", {}) or {}
+    config["AI_ENABLED"] = bool(ai_cfg.get("enabled", False))
+    config["AI_CRYPTO_FOCUS"] = list(ai_cfg.get("crypto_focus", ["比特币", "BTC", "以太坊", "ETH"]))
+    config["AI_MAX_ARTICLES"] = int(ai_cfg.get("max_articles", 20))
+    config["AI_MODEL"] = str(ai_cfg.get("model", "gemini-2.0-pro-exp-02-05"))
+    config["AI_TIMEOUT_SECONDS"] = int(ai_cfg.get("timeout_seconds", 60))
+    config["AI_PROMPT_STYLE"] = str(ai_cfg.get("prompt_style", "concise"))
+
+    # 环境变量中的 Gemini API Key
+    config["GEMINI_API_KEY"] = os.environ.get("GEMINI_API_KEY", "").strip()
+    
+    # 调试信息
+    print(f"AI分析配置: enabled={config['AI_ENABLED']}, model={config['AI_MODEL']}")
+    print(f"AI关键词: {config['AI_CRYPTO_FOCUS']}")
+    print(f"GEMINI_API_KEY: {'已设置' if config['GEMINI_API_KEY'] else '未设置'}")
+
     # 输出配置来源信息
     webhook_sources = []
     if config["FEISHU_WEBHOOK_URL"]:
@@ -1666,11 +1683,13 @@ def generate_html_report(
 
     # AI 分析：根据配置调用 Gemini，对加密货币相关资讯给出走势建议
     if CONFIG.get("AI_ENABLED"):
+        print("🤖 开始AI分析...")
         try:
             # 选取候选新闻
             items: List[Dict] = []
             max_articles = CONFIG.get("AI_MAX_ARTICLES", 20)
             crypto_focus = CONFIG.get("AI_CRYPTO_FOCUS", ["比特币", "BTC", "以太坊", "ETH"]) or []
+            print(f"AI关键词: {crypto_focus}")
 
             # 从各词组里顺序收集，优先高权重词组靠前的新闻
             for stat in stats:
@@ -1686,6 +1705,8 @@ def generate_html_report(
                 if len(items) >= max_articles * 2:
                     break
 
+            print(f"收集到 {len(items)} 条候选新闻")
+
             # 抓取正文并简单过滤出与币相关的内容
             enriched: List[Dict] = []
             for it in items:
@@ -1700,13 +1721,26 @@ def generate_html_report(
                     it["content"] = content
                     enriched.append(it)
 
+            print(f"过滤后得到 {len(enriched)} 条相关新闻")
+
             if enriched:
+                print("构建Gemini提示词...")
                 prompt = build_gemini_prompt(crypto_focus, enriched, CONFIG.get("AI_PROMPT_STYLE", "concise"))
+                print(f"提示词长度: {len(prompt)} 字符")
                 ai_html = run_gemini_analysis(prompt, CONFIG.get("GEMINI_API_KEY"), CONFIG.get("AI_MODEL", "gemini-2.0-pro-exp-02-05"), CONFIG.get("AI_TIMEOUT_SECONDS", 60))
                 if ai_html:
+                    print(f"AI分析完成，结果长度: {len(ai_html)} 字符")
                     report_data["ai_html"] = ai_html
+                else:
+                    print("AI分析返回空结果")
+            else:
+                print("没有找到相关新闻，跳过AI分析")
         except Exception as e:
             print(f"AI 分析阶段跳过（错误）：{e}")
+            import traceback
+            traceback.print_exc()
+    else:
+        print("AI分析未启用")
 
     html_content = render_html_content(
         report_data, total_titles, is_daily_summary, mode, update_info
