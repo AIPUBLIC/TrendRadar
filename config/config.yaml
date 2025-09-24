@@ -3,7 +3,7 @@ app:
   show_version_update: true # 控制显示版本更新提示，如果 false，则不接受新版本提示
 
 ai_analysis:
-  enabled: false # 是否启用AI分析（Gemini）
+  enabled: true # 是否启用AI分析（Gemini）
   crypto_focus: ["比特币", "BTC", "以太坊", "ETH"] # 关注的主流数字货币关键词
   max_articles: 20 # 每次提交给AI的新闻条数上限（避免超长）
   model: "gemini-2.0-pro-exp-02-05" # 你的Gemini 2.5 Pro可用的模型名，必要时调整
