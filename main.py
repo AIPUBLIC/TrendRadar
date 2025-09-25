@@ -352,13 +352,12 @@ def run_openai_analysis(prompt: str, api_key: Optional[str], model_name: str, ti
         print("未安装 openai，跳过AI分析")
         return None
     try:
-        client = openai.OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
+        openai.api_key = api_key
+        response = openai.ChatCompletion.create(
             model=model_name,
             messages=[{"role": "user", "content": prompt}],
             max_tokens=1000,
-            temperature=0.7,
-            timeout=timeout_seconds
+            temperature=0.7
         )
         if response.choices and response.choices[0].message.content:
             return response.choices[0].message.content.strip()
