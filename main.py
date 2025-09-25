@@ -18,6 +18,12 @@ from bs4 import BeautifulSoup
 try:
     import google.generativeai as genai
 except Exception:
+    pass
+
+try:
+    import openai
+except Exception:
+    pass
     genai = None
 
 import pytz
@@ -187,19 +193,22 @@ def load_config():
     # AI 分析配置
     ai_cfg = config_data.get("ai_analysis", {}) or {}
     config["AI_ENABLED"] = bool(ai_cfg.get("enabled", False))
+    config["AI_PROVIDER"] = str(ai_cfg.get("provider", "gemini"))
     config["AI_CRYPTO_FOCUS"] = list(ai_cfg.get("crypto_focus", ["比特币", "BTC", "以太坊", "ETH"]))
     config["AI_MAX_ARTICLES"] = int(ai_cfg.get("max_articles", 20))
     config["AI_MODEL"] = str(ai_cfg.get("model", "gemini-2.0-pro-exp-02-05"))
     config["AI_TIMEOUT_SECONDS"] = int(ai_cfg.get("timeout_seconds", 60))
     config["AI_PROMPT_STYLE"] = str(ai_cfg.get("prompt_style", "concise"))
 
-    # 环境变量中的 Gemini API Key
+    # 环境变量中的 API Keys
     config["GEMINI_API_KEY"] = os.environ.get("GEMINI_API_KEY", "").strip()
+    config["OPENAI_API_KEY"] = os.environ.get("CHATGPT", "").strip()
     
     # 调试信息
-    print(f"AI分析配置: enabled={config['AI_ENABLED']}, model={config['AI_MODEL']}")
+    print(f"AI分析配置: enabled={config['AI_ENABLED']}, provider={config['AI_PROVIDER']}, model={config['AI_MODEL']}")
     print(f"AI关键词: {config['AI_CRYPTO_FOCUS']}")
     print(f"GEMINI_API_KEY: {'已设置' if config['GEMINI_API_KEY'] else '未设置'}")
+    print(f"CHATGPT_API_KEY: {'已设置' if config['OPENAI_API_KEY'] else '未设置'}")
 
     # 输出配置来源信息
     webhook_sources = []
@@ -332,6 +341,30 @@ def run_gemini_analysis(prompt: str, api_key: Optional[str], model_name: str, ti
         return None
     except Exception as e:
         print(f"Gemini 调用失败: {e}")
+        return None
+
+
+def run_openai_analysis(prompt: str, api_key: Optional[str], model_name: str, timeout_seconds: int) -> Optional[str]:
+    if not api_key:
+        print("AI分析已启用但未提供 CHATGPT API Key，跳过AI分析")
+        return None
+    if openai is None:
+        print("未安装 openai，跳过AI分析")
+        return None
+    try:
+        client = openai.OpenAI(api_key=api_key)
+        response = client.chat.completions.create(
+            model=model_name,
+            messages=[{"role": "user", "content": prompt}],
+            max_tokens=1000,
+            temperature=0.7,
+            timeout=timeout_seconds
+        )
+        if response.choices and response.choices[0].message.content:
+            return response.choices[0].message.content.strip()
+        return None
+    except Exception as e:
+        print(f"OpenAI 调用失败: {e}")
         return None
 
 
@@ -1724,10 +1757,19 @@ def generate_html_report(
             print(f"过滤后得到 {len(enriched)} 条相关新闻")
 
             if enriched:
-                print("构建Gemini提示词...")
+                print("构建AI提示词...")
                 prompt = build_gemini_prompt(crypto_focus, enriched, CONFIG.get("AI_PROMPT_STYLE", "concise"))
                 print(f"提示词长度: {len(prompt)} 字符")
-                ai_html = run_gemini_analysis(prompt, CONFIG.get("GEMINI_API_KEY"), CONFIG.get("AI_MODEL", "gemini-2.0-pro-exp-02-05"), CONFIG.get("AI_TIMEOUT_SECONDS", 60))
+                
+                # 根据配置选择AI提供商
+                provider = CONFIG.get("AI_PROVIDER", "gemini")
+                if provider == "openai":
+                    print("使用OpenAI进行分析...")
+                    ai_html = run_openai_analysis(prompt, CONFIG.get("OPENAI_API_KEY"), CONFIG.get("AI_MODEL", "gpt-3.5-turbo"), CONFIG.get("AI_TIMEOUT_SECONDS", 60))
+                else:
+                    print("使用Gemini进行分析...")
+                    ai_html = run_gemini_analysis(prompt, CONFIG.get("GEMINI_API_KEY"), CONFIG.get("AI_MODEL", "gemini-2.0-pro-exp-02-05"), CONFIG.get("AI_TIMEOUT_SECONDS", 60))
+                
                 if ai_html:
                     print(f"AI分析完成，结果长度: {len(ai_html)} 字符")
                     report_data["ai_html"] = ai_html
