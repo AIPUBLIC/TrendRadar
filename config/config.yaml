@@ -6,7 +6,7 @@ ai_analysis:
   enabled: true # 是否启用AI分析（Gemini）
   crypto_focus: ["比特币", "BTC", "Bitcoin", "以太坊", "ETH", "加密", "数字货币", "虚拟资产", "区块链", "USDT", "ETF", "现货ETF", "币安", "Binance", "Coinbase", "SOL", "Solana", "BNB", "DOGE", "狗狗币", "投资", "行情", "市场", "交易", "金融", "资产", "基金", "股票", "证券"]
   max_articles: 20 # 每次提交给AI的新闻条数上限（避免超长）
-  model: "gemini-2.0-pro-exp-02-05" # 你的Gemini 2.5 Pro可用的模型名，必要时调整
+  model: "gemini-1.5-pro" # 你的Gemini 2.5 Pro可用的模型名，必要时调整
   timeout_seconds: 60 # AI调用超时时间
   prompt_style: "concise" # 输出风格：concise|detailed
 
