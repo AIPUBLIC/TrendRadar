@@ -2490,15 +2490,21 @@ def render_html_content(
 
     # 注入 AI 分析
     ai_html = report_data.get("ai_html")
+    print(f"HTML渲染阶段 - ai_html存在: {ai_html is not None}")
     if ai_html:
+        print(f"HTML渲染阶段 - ai_html长度: {len(ai_html)}")
         provider = CONFIG.get("AI_PROVIDER", "gemini")
         provider_name = {"qwen": "通义千问", "openai": "ChatGPT", "gemini": "Gemini"}.get(provider, "AI")
+        print(f"HTML渲染阶段 - 提供商: {provider_name}")
         html += f"""
                 <div class=\"ai-section\">
                     <div class=\"ai-title\">🤖 AI 加密市场简析（{provider_name}）</div>
                     <div class=\"ai-content\">{html_escape(ai_html)}</div>
                 </div>
         """
+        print("HTML渲染阶段 - AI分析部分已添加到HTML")
+    else:
+        print("HTML渲染阶段 - ai_html为空，跳过AI分析部分")
 
     html += """
             </div>
