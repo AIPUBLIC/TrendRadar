@@ -83,7 +83,7 @@ jobs:
           echo "=== 检查暂存区状态 ==="
           git status
           echo "=== 检查是否有更改 ==="
-          if ! git diff --quiet && ! git diff --staged --quiet; then
+          if ! git diff --staged --quiet; then
             echo "检测到更改，开始提交和推送"
             git commit -m "Auto update by GitHub Actions at $(TZ=Asia/Shanghai date)"
             git pull --rebase origin master
