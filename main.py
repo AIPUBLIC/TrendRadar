@@ -1815,6 +1815,10 @@ def generate_html_report(
     else:
         print("AI分析未启用")
 
+    print(f"传递给render_html_content的report_data包含ai_html: {'ai_html' in report_data}")
+    if 'ai_html' in report_data:
+        print(f"传递给render_html_content的ai_html长度: {len(report_data['ai_html'])}")
+    
     html_content = render_html_content(
         report_data, total_titles, is_daily_summary, mode, update_info
     )
