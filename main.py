@@ -24,6 +24,11 @@ try:
     import openai
 except Exception:
     pass
+
+try:
+    from dashscope import Generation
+except Exception:
+    pass
     genai = None
 
 import pytz
@@ -203,12 +208,14 @@ def load_config():
     # 环境变量中的 API Keys
     config["GEMINI_API_KEY"] = os.environ.get("GEMINI_API_KEY", "").strip()
     config["OPENAI_API_KEY"] = os.environ.get("CHATGPT", "").strip()
+    config["QWEN_API_KEY"] = os.environ.get("QWEN_API_KEY", "").strip()
     
     # 调试信息
     print(f"AI分析配置: enabled={config['AI_ENABLED']}, provider={config['AI_PROVIDER']}, model={config['AI_MODEL']}")
     print(f"AI关键词: {config['AI_CRYPTO_FOCUS']}")
     print(f"GEMINI_API_KEY: {'已设置' if config['GEMINI_API_KEY'] else '未设置'}")
     print(f"CHATGPT_API_KEY: {'已设置' if config['OPENAI_API_KEY'] else '未设置'}")
+    print(f"QWEN_API_KEY: {'已设置' if config['QWEN_API_KEY'] else '未设置'}")
 
     # 输出配置来源信息
     webhook_sources = []
@@ -364,6 +371,28 @@ def run_openai_analysis(prompt: str, api_key: Optional[str], model_name: str, ti
         return None
     except Exception as e:
         print(f"OpenAI 调用失败: {e}")
+        return None
+
+
+def run_qwen_analysis(prompt: str, api_key: Optional[str], model_name: str, timeout_seconds: int) -> Optional[str]:
+    if not api_key:
+        print("AI分析已启用但未提供 QWEN_API_KEY，跳过AI分析")
+        return None
+    try:
+        response = Generation.call(
+            model=model_name,
+            prompt=prompt,
+            api_key=api_key,
+            max_tokens=1000,
+            temperature=0.7
+        )
+        if response.status_code == 200:
+            return response.output.text.strip()
+        else:
+            print(f"通义千问 调用失败: {response.message}")
+            return None
+    except Exception as e:
+        print(f"通义千问 调用失败: {e}")
         return None
 
 
@@ -1762,7 +1791,10 @@ def generate_html_report(
                 
                 # 根据配置选择AI提供商
                 provider = CONFIG.get("AI_PROVIDER", "gemini")
-                if provider == "openai":
+                if provider == "qwen":
+                    print("使用通义千问进行分析...")
+                    ai_html = run_qwen_analysis(prompt, CONFIG.get("QWEN_API_KEY"), CONFIG.get("AI_MODEL", "qwen-turbo"), CONFIG.get("AI_TIMEOUT_SECONDS", 60))
+                elif provider == "openai":
                     print("使用OpenAI进行分析...")
                     ai_html = run_openai_analysis(prompt, CONFIG.get("OPENAI_API_KEY"), CONFIG.get("AI_MODEL", "gpt-3.5-turbo"), CONFIG.get("AI_TIMEOUT_SECONDS", 60))
                 else:
