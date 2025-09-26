@@ -2491,9 +2491,11 @@ def render_html_content(
     # 注入 AI 分析
     ai_html = report_data.get("ai_html")
     if ai_html:
+        provider = CONFIG.get("AI_PROVIDER", "gemini")
+        provider_name = {"qwen": "通义千问", "openai": "ChatGPT", "gemini": "Gemini"}.get(provider, "AI")
         html += f"""
                 <div class=\"ai-section\">
-                    <div class=\"ai-title\">🤖 AI 加密市场简析（Gemini）</div>
+                    <div class=\"ai-title\">🤖 AI 加密市场简析（{provider_name}）</div>
                     <div class=\"ai-content\">{html_escape(ai_html)}</div>
                 </div>
         """
@@ -2685,7 +2687,9 @@ def render_feishu_content(
     if report_data.get("ai_html"):
         ai_text = report_data["ai_html"].strip()
         short_ai = ai_text[:600]
-        text_content += f"\n{CONFIG['FEISHU_MESSAGE_SEPARATOR']}\n\n🤖 AI 简析（Gemini）\n\n{short_ai}\n"
+        provider = CONFIG.get("AI_PROVIDER", "gemini")
+        provider_name = {"qwen": "通义千问", "openai": "ChatGPT", "gemini": "Gemini"}.get(provider, "AI")
+        text_content += f"\n{CONFIG['FEISHU_MESSAGE_SEPARATOR']}\n\n🤖 AI 简析（{provider_name}）\n\n{short_ai}\n"
 
     now = get_beijing_time()
     text_content += (
@@ -2787,7 +2791,9 @@ def render_dingtalk_content(
     if report_data.get("ai_html"):
         ai_text = report_data["ai_html"].strip()
         short_ai = ai_text[:600]
-        text_content += f"\n---\n\n🤖 AI 简析（Gemini）\n\n{short_ai}\n"
+        provider = CONFIG.get("AI_PROVIDER", "gemini")
+        provider_name = {"qwen": "通义千问", "openai": "ChatGPT", "gemini": "Gemini"}.get(provider, "AI")
+        text_content += f"\n---\n\n🤖 AI 简析（{provider_name}）\n\n{short_ai}\n"
 
     text_content += f"\n\n> 更新时间：{now.strftime('%Y-%m-%d %H:%M:%S')}"
 
